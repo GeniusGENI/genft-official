@@ -1,0 +1,8 @@
+{
+  "name": "Genius Collectibles",
+  "description": "Genius Collectibles (\"GENFTs\") are obtained by using the Genius Smart Financial Contracts, the ecosystem that manages the $GENI utility token. You can obtain a Genius Collectible by interacting with the contracts: Create a Miner, End a Miner, Redeem $GENI for collateral in the Stability Pool, and more! You can even buy Booster Packs and Ultimate Packs, which contain 4 and 16 random GENFTs, respectively. But be quick, because when a New Edition of GENFTs are released, the prior Edition's GENFTs can never be minted again! For more technical information about Genius and GENFTs, visit: https://geni.to/smartcontract",
+  "image": "ipfs://Qmd4d2Nhd8M7uhnuuEfaDrqW5nnDSBSbdtCsRtdhk8RURU/Genius-2160.png",
+  "external_link": "https://start.geni.app/genft",
+  "seller_fee_basis_points": 1618,
+  "fee_recipient": "0x4444444444329C1eC1E8e5aC8903d183F91f3A3f"
+}

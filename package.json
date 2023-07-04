@@ -1,0 +1,33 @@
+{
+  "name": "genft-editions",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "compile": "npx hardhat compile",
+    "deploy-edition-fuji": "npx hardhat run ./scripts/deploy-edition001v2.js --network fuji",
+    "deploy-edition-avax": "npx hardhat run ./scripts/deploy-edition001v2.js --network avax",
+    "deploy-edition-eth": "npx hardhat run ./scripts/deploy-edition001v2.js --network eth",
+    "deploy-edition-bsc": "npx hardhat run ./scripts/deploy-edition001v2.js --network bsc",
+    "deploy-edition-polygon": "npx hardhat run ./scripts/deploy-edition001v2.js --network polygon",
+    "deploy-edition-localhost": "npx hardhat run ./scripts/deploy-edition001v2.js --network localhost",
+    "deploy-royalty-eth": "npx hardhat run ./scripts/deploy-royalty.js --network eth",
+    "deploy-royalty-bsc": "npx hardhat run ./scripts/deploy-royalty.js --network bsc",
+    "deploy-royalty-polygon": "npx hardhat run ./scripts/deploy-royalty.js --network polygon",
+    "deploy-royalty-avax": "npx hardhat run ./scripts/deploy-royalty.js --network avax",
+    "deploy-royalty-localhost": "npx hardhat run ./scripts/deploy-royalty.js --network localhost",
+    "deploy-localhost-edition-testing": "npx hardhat run ./scripts/deploy-localhost-edition-testing.js --network localhost"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^2.0.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.6.0",
+    "dotenv": "^16.0.3",
+    "hardhat": "^2.14.0",
+    "hardhat-prettier": "^0.0.1",
+    "keccak256": "^1.0.6",
+    "lowdb": "^1.0.0",
+    "merkletreejs": "^0.2.32"
+  }
+}

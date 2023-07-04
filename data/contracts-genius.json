@@ -1,0 +1,34 @@
+{
+  "fuji": {
+    "Edition001": {
+      "address": "0x8656996710CF52fBaCB8CacE1b670fea52Da695E",
+      "deployer": "0x70884C20F9C057A7B396719fa0bf1F659C98D0Bf"
+    }
+  },
+  "hardhat": {
+    "RoyaltyReceiver": {
+      "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    }
+  },
+  "goerli": {
+    "RoyaltyReceiver": {
+      "address": "0x87f98305fE507Ed74624a75A53320500C01ca268",
+      "deployer": "0x70884C20F9C057A7B396719fa0bf1F659C98D0Bf"
+    },
+    "Edition001V2": {
+      "address": "0x5808A92afa04BE6F014800db83Ad4A978A39D513",
+      "deployer": "0x70884C20F9C057A7B396719fa0bf1F659C98D0Bf"
+    }
+  },
+  "localhost": {
+    "Edition001V2": {
+      "address": "0x4c5859f0F772848b2D91F1D83E2Fe57935348029",
+      "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    },
+    "RoyaltyReceiver": {
+      "address": "0x809d550fca64d94Bd9F66E60752A544199cfAC3D",
+      "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    }
+  }
+}
