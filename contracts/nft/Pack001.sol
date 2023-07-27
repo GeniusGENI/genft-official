@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 // Genius is NOT LICENSED FOR COPYING.
-// This Genius Edition Contract is NOT LICENSED FOR COPYING.
 // Genius (C) 2023. All Rights Reserved.
 pragma solidity 0.8.4;
 
-import "./EditionAbstract.sol";
+import "../GeniusAccessor.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/draft-IERC20Permit.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
-import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-
 
 interface IDaiPermit {
     function permit(
@@ -24,56 +21,102 @@ interface IDaiPermit {
     ) external;
 }
 
-interface IGenius {
-    function oaGrantor() external view returns (address);
+interface IEdition {
+    function mintById(
+        address beneficiary,
+        uint256 tokenId,
+        uint256 quantity
+    ) external;
 
-    function PHI() external view returns (uint256);
-}
-
-interface IStability {
-    function existingCollaterals(address colToken) external view returns (bool);
-
-    function activeCollaterals(address colToken) external view returns (bool);
-
-    function PHI() external view returns (uint256);
-}
-
-interface IGenftController {
-    struct Edition {
-        address editionAddress;
-        uint56 id;
-        uint40 startTime;
-    }
-
-    function currentEdition() external view
-        returns (IGenftController.Edition memory);
-
-    function PHI_PRECISION() external view returns (uint256);
-}
-
-interface ICalendar {
-    function getCurrentGeniusDay() external view returns (uint256);
+    function packBurn(
+        address account,
+        uint256 packId,
+        uint256 quantity
+    ) external;
 }
 
 
-contract Edition001V2 is EditionAbstract, ReentrancyGuard {
+contract Pack001 is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    /**
-     * Edition custom errors
-     */
-    error ErrorMintSettingDoesNotExist();
-    error ErrorInvalidSetting();
-    error ErrorInsufficientDeposit();
-    error ErrorUnknown();
-    error ErrorEditionExpired();
-    error ErrorPobOnly();
-    error MustWaitAnotherBlock();
-    error ErrorNotHolder();
-    error ErrorMerkleOrAlreadyClaimed();
-    error ErrorInvalidGenius();
     error ErrorAlreadyUpgraded();
-//    error ErrorQuantityLimitReached();
+    error ErrorEditionExpired();
+    error ErrorInsufficientDeposit();
+    error ErrorInvalidGenius();
+    error ErrorInvalidSetting();
+    error ErrorMintSettingDoesNotExist();
+    error ErrorNullAddress();
+    error ErrorNotAllowed();
+    error ErrorPobOnly();
+    error ErrorUnknown();
+    error MustWaitAnotherBlock();
+
+    /**
+     * Constants
+     */
+
+    // PHI^-3
+    uint256 public constant PHI_NPOW_3 = 236067977499789696409173668;
+    // PHI^-6
+    uint256 public constant PHI_NPOW_6 = 55728090000841214363305325;
+    // PHI^-7 = 0.034441853748633026659628846753295530364019337474917
+    uint256 private constant PHI_NPOW_7 = 34441853748633026659628846;
+    // PHI^-10 = 0.0081306187557833487477241098899035253829951106830425
+    uint256 private constant PHI_NPOW_10 = 8130618755783348747724109;
+    // PHI^-11 = 0.0050249987406414902082282585417924771075170027128947
+    uint256 private constant PHI_NPOW_11 = 5024998740641490208228258;
+
+    // These numbers are all based on PHI ratio rarity, and the most rare rarity
+    // classes are defined, first.
+    uint256 public constant MAX_MYTHIC_AMPED = PHI_NPOW_11;
+    uint256 public constant MAX_MYTHIC = MAX_MYTHIC_AMPED + PHI_NPOW_10;
+    uint256 public constant MAX_RARE_AMPED = MAX_MYTHIC + PHI_NPOW_10;
+    uint256 public constant MAX_RARE = MAX_RARE_AMPED + PHI_NPOW_7;
+    uint256 public constant MAX_UNCOMMON_AMPED = MAX_RARE + PHI_NPOW_7;
+    uint256 public constant MAX_COMMON_AMPED = MAX_UNCOMMON_AMPED + PHI_NPOW_6;
+    uint256 public constant MAX_UNCOMMON = MAX_COMMON_AMPED + PHI_NPOW_3;
+
+    // Rarities: maximum of 256 different rarities (8 bits)
+    uint8 private constant RARITY_COMMON = 0;
+    uint8 private constant RARITY_UNCOMMON = 1;
+    uint8 private constant RARITY_COMMON_AMPED = 2;
+    uint8 private constant RARITY_UNCOMMON_AMPED = 3;
+    uint8 private constant RARITY_RARE = 4;
+    uint8 private constant RARITY_RARE_AMPED = 5;
+    uint8 private constant RARITY_MYTHIC = 6;
+    uint8 private constant RARITY_MYTHIC_AMPED = 7;
+
+
+    // Varieties: maximum of 256 different varieties (8 bits) per rarity.
+    uint256[] public VARIETIES = [
+        // common (0)
+        15,
+        // uncommon (1)
+        9,
+        // common foil (2)
+        15,
+        // uncommon foil (3)
+        9,
+        // rare (4)
+        6,
+        // rare foil (5)
+        6,
+        // mythic (6)
+        2,
+        // mythic foil (7)
+        2
+    ];
+
+    uint256 public constant ULTIMATE_TOKEN_ID = 2**255 - 1;
+    uint256 public constant BOOSTER_TOKEN_ID = 2**255 - 2;
+
+    // deadline for permit
+    uint256 constant deadline =
+        0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
+
+    // how many NFTs does an ultimate yield?
+    uint256 constant ULTIMATE_YIELD = 16;
+    uint256 constant BOOSTER_YIELD = 4;
 
     /**
      * Edition custom Events
@@ -106,89 +149,25 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         uint8[] varieties
     );
 
-    event Convert(
-        address indexed account,
-        uint256[] tokenIds,
-        uint256[] amounts
-    );
-
-    /**
-     * Rarity Constants
-     */
-
-    // PHI^-3
-    uint256 public constant PHI_NPOW_3 = 236067977499789696409173668;
-    // PHI^-6
-    uint256 public constant PHI_NPOW_6 = 55728090000841214363305325;
-    // PHI^-7 = 0.034441853748633026659628846753295530364019337474917
-    uint256 private constant PHI_NPOW_7 = 34441853748633026659628846;
-    // PHI^-10 = 0.0081306187557833487477241098899035253829951106830425
-    uint256 private constant PHI_NPOW_10 = 8130618755783348747724109;
-    // PHI^-11 = 0.0050249987406414902082282585417924771075170027128947
-    uint256 private constant PHI_NPOW_11 = 5024998740641490208228258;
-
-    // these numbers are all based on
-    uint256 public constant MAX_MYTHIC_AMPED = PHI_NPOW_11;
-    uint256 public constant MAX_MYTHIC = MAX_MYTHIC_AMPED + PHI_NPOW_10;
-    uint256 public constant MAX_RARE_AMPED = MAX_MYTHIC + PHI_NPOW_10;
-    uint256 public constant MAX_RARE = MAX_RARE_AMPED + PHI_NPOW_7;
-    uint256 public constant MAX_UNCOMMON_AMPED = MAX_RARE + PHI_NPOW_7;
-    uint256 public constant MAX_COMMON_AMPED = MAX_UNCOMMON_AMPED + PHI_NPOW_6;
-    uint256 public constant MAX_UNCOMMON = MAX_COMMON_AMPED + PHI_NPOW_3;
-
-    // Rarities: maximum of 256 different rarities (8 bits)
-    uint8 private constant RARITY_COMMON = 0;
-    uint8 private constant RARITY_UNCOMMON = 1;
-    uint8 private constant RARITY_COMMON_AMPED = 2;
-    uint8 private constant RARITY_UNCOMMON_AMPED = 3;
-    uint8 private constant RARITY_RARE = 4;
-    uint8 private constant RARITY_RARE_AMPED = 5;
-    uint8 private constant RARITY_MYTHIC = 6;
-    uint8 private constant RARITY_MYTHIC_AMPED = 7;
-
-    // Varieties: maximum of 256 different varieties (8 bits) per rarity.
-    uint256[] public VARIETIES = [
-        // common (0)
-        15,
-        // uncommon (1)
-        9,
-        // common foil (2)
-        15,
-        // uncommon foil (3)
-        9,
-        // rare (4)
-        6,
-        // rare foil (5)
-        6,
-        // mythic (6)
-        2,
-        // mythic foil (7)
-        2
-    ];
-
-    // deadline for permit
-    uint256 deadline =
-        0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
-
-    // how many NFTs does an ultimate yield?
-    uint256 constant ULTIMATE_YIELD = 16;
-    uint256 constant BOOSTER_YIELD = 4;
-    bytes32 internal constant MERKLE_ROOT =
-        0xcad71776a60b1a4ca80bfa5452bfc50beeb645b7f64e97f5c464ef45a41d548d;
-
-    address public stabilityAddress;
-    address public immutable royaltyAddress;
     address public calendarAddress;
+    address public genftControllerAddress;
+    address public geniAddress;
+    // NOTE: this is the Collateral Vault and Stability Pool
+    address public cvAddress;
+    // This is the edition that these packs belong to
+    address public immutable editionAddress;
+    address public immutable royaltyAddress;
 
-    IGenius geniContract;
-    IStability stabilityContract;
     ICalendar calendarContract;
-    IGenftController genftContract;
-    EditionAbstract public immutable genftV1Contract;
+    IGenftController genftController;
+    IGenius geniContract;
+    ICollateralVault cvContract;
+    IEdition immutable editionContract;
 
     // Once the upgrade is applied, this flag will prevent the contract from
     // being upgraded again.
-    bool public appliedUpgrade = false;
+    bool public contractLocked;
+    uint256 public immutable LAUNCH_TIMESTAMP;
 
     /**
      * paymentToken: the ERC20 token contract address for the token used to
@@ -211,154 +190,155 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
     // the end user has already unpacked during this block.  This variable is
     // intended to prevent the end user from unpacking more than 1 booster or
     // ultimate pack per block so that the unpacked results are truly random.
-    mapping(address => mapping(uint256 => bool)) private oneUnpackPerBlock;
-
-    // Tracks the account addresses that have received the Booster Pack reward
-    // for converting the old Edition 001 GENFTs to the new version.  This will
-    // remain public so that the DAPP is able to communicate to the end user
-    // whether or not they are eligible to receive a free Booster Pack :)
-    mapping(address => bool) public userReceivedConvertReward;
-
-    // Tracks whether or not the account address has already claimed their free
-    // GENFT reward.  Only Genius Sacrifice Participants get a free claim.  This
-    // remains public so the DAPP can communicate to the end user whether or not
-    // they are eligible.
-    mapping(address => bool) public claimedFreeNft;
+    mapping(address => uint256) private oneUnpackPerBlock;
 
     constructor(
-        address _geniAddress,
-        address _genftAddress,
-        address _stabilityAddress,
         address _calendarAddress,
-        address _royaltyAddress,
-        // The prior Genius Editions v1 ERC-1155 contract
-        address _genftV1Address,
-        string memory _baseUri
-    )
-        EditionAbstract(
-            "Genius Collectibles First Edition",
-            "GENFT-001",
-            "2",
-            _baseUri
-        )
-    {
-        if (_geniAddress == address(0) ||
-            _genftAddress == address(0) ||
-            _stabilityAddress == address(0) ||
+        address _cvAddress,
+        // This Pack belongs to what edition?
+        address _editionAddress,
+        address _genftController,
+        address _geniAddress,
+        address _royaltyAddress
+    ) {
+        LAUNCH_TIMESTAMP = block.timestamp;
+
+        if (
             _calendarAddress == address(0) ||
-            _royaltyAddress == address(0) ||
-            _genftV1Address == address(0)
+            _cvAddress == address(0) ||
+            _editionAddress == address(0) ||
+            _genftController == address(0) ||
+            _geniAddress == address(0) ||
+            _royaltyAddress == address(0)
         ) {
             revert ErrorNullAddress();
         }
 
-        // Genius core contracts
-        geniAddress = _geniAddress;
-        geniContract = IGenius(_geniAddress);
-        genftAddress = _genftAddress;
-        genftContract = IGenftController(_genftAddress);
-        stabilityAddress = _stabilityAddress;
-        stabilityContract = IStability(_stabilityAddress);
         calendarAddress = _calendarAddress;
-        calendarContract = ICalendar(_calendarAddress);
-
-        // GENFT (independent from Genius) contracts
+        cvAddress = _cvAddress;
+        editionAddress = _editionAddress;
+        genftControllerAddress = _genftController;
+        geniAddress = _geniAddress;
         royaltyAddress = _royaltyAddress;
-        genftV1Contract = EditionAbstract(_genftV1Address);
 
-        _setTokenURI(
-            BOOSTER_TOKEN_ID,
-            "booster.json"
-        );
-
-        _setTokenURI(
-            ULTIMATE_TOKEN_ID,
-            "ultimate.json"
-        );
-
-        _setURIs();
+        calendarContract = ICalendar(_calendarAddress);
+        cvContract = ICollateralVault(_cvAddress);
+        editionContract = IEdition(_editionAddress);
+        genftController = IGenftController(_genftController);
+        geniContract = IGenius(_geniAddress);
     }
 
     /**
      * @dev  Check for EVIDENCE that the contract address is a Genius contract.
      */
-    function _checkForGenius(address contractAddressToCheck) private {
+    function _checkForGenius(address contractAddressToCheck) private view {
         try IGenius(contractAddressToCheck).PHI() returns (uint256 phi) {
             if (phi == 0) {
                 revert ErrorInvalidGenius();
             }
-        } catch {
+        }
+        catch {
             revert ErrorInvalidGenius();
         }
     }
 
     /**
+     * @dev  locks contract's ability to be upgraded by the Grantor.
+     */
+    function lockContract() external onlyGrantor {
+        contractLocked = true;
+    }
+
+    /**
      * @dev  Allows the Grantor one chance to change/update the contract
      *       addresses.  This will be only for a future upgrade.
+     * @param  _calendarAddress  Genius Calendar contract
+     * @param  _genftController  The GENFT Controller contract address
      * @param  _geniAddress  Genius ERC20 contract
-     * @param  _genftControllerAddress  The GENFT Controller contract
-     * @param  _stabilityAddress  Genius "Stability Pool" (Collateral Vault)
-     *                            contract.
      */
     function upgrade(
-        address _geniAddress,
-        address _genftControllerAddress,
-        address _stabilityAddress,
-        address _calendarAddress
+        address _calendarAddress,
+        address _genftController,
+        address _geniAddress
     ) external onlyGrantor {
-        // STEP 0: enforce that this function can only be called once.
-        if (appliedUpgrade) {
+        // STEP 1: enforce that this function can only be called once.
+        if (contractLocked) {
             revert ErrorAlreadyUpgraded();
         }
 
         // STEP 1: verify all contracts.  They must have Genius-specific
         // functionality to pass verification.
-
+        //
+        // Also, none of the new contract addresses can be equal to the prior
+        // contract addresses.  Mixing old contracts with new contracts will
+        // simply not function properly will the upgrade.
+        _checkForGenius(_calendarAddress);
+        _checkForGenius(_genftController);
         _checkForGenius(_geniAddress);
-        _checkForGenius(_stabilityAddress);
 
-        try ICalendar(_calendarAddress).getCurrentGeniusDay()
-        returns (uint256 currentGeniusDay)
-        {
-            if (currentGeniusDay == 0) {
-                revert ErrorInvalidGenius();
-            }
-        } catch {
-            revert ErrorInvalidGenius();
-        }
-
-        try IGenftController(_genftControllerAddress).PHI_PRECISION()
-        returns (uint256 phiPrecision)
-        {
-            if (phiPrecision == 0) {
-                revert ErrorInvalidGenius();
-            }
-        } catch {
-            revert ErrorInvalidGenius();
-        }
-
-        // When upgrading, these contracts *must* have a new contract address
+        // STEP 2: When upgrading, these contracts *must* have a new contract
+        // address.
         if (
+            _calendarAddress == calendarAddress ||
             _geniAddress == geniAddress ||
-            _genftControllerAddress == genftAddress ||
-            _stabilityAddress == stabilityAddress
+            _genftController == genftControllerAddress
         ) {
             revert ErrorInvalidGenius();
         }
 
-        // STEP 2: update the core Genius contracts to their upgraded version
-        geniAddress = _geniAddress;
-        geniContract = IGenius(_geniAddress);
-        genftAddress = _genftControllerAddress;
-        genftContract = IGenftController(_genftControllerAddress);
-        stabilityAddress = _stabilityAddress;
-        stabilityContract = IStability(_stabilityAddress);
+        // STEP 3: update contracts to their upgraded version
         calendarAddress = _calendarAddress;
-        calendarContract = ICalendar(_calendarAddress);
+        genftControllerAddress = _genftController;
+        geniAddress = _geniAddress;
 
-        // Switch the flag to 'true' so that the Grantor is locked out from
-        // upgrading the contract addresses again in the future.
-        appliedUpgrade = true;
+        calendarContract = ICalendar(_calendarAddress);
+        genftController = IGenftController(_genftController);
+        geniContract = IGenius(_geniAddress);
+    }
+
+    /**
+     * @dev Users can purchase First Edition v2 GENFT Packs for as long as
+     *      Edition v2 is the latest edition.  If Edition v2 is not the latest,
+     *      users can still purchase from it ONLY for the first 365 Genius days.
+     */
+    modifier canPurchase(address paymentToken) {
+        // After Edition 001 / Pack 001, developers can simply use the first
+        // condition's line to determine the first edition:
+        address currentEdition = editionAddress;
+        if (contractLocked) {
+            currentEdition = genftController.currentEditionAddress();
+        }
+        else {
+            currentEdition = genftController.currentEdition().editionAddress;
+        }
+
+        // Has the edition properly expired?  This Edition is only allowed to be
+        // distributed while there is no newer edition AND we are beyond the
+        // first 365 days of Genius.
+        if (
+            currentEdition != editionAddress &&
+            calendarContract.getCurrentGeniusDay() > 365
+        ) {
+            revert ErrorEditionExpired();
+        }
+
+        // If Genius is UPGRADED (contract locked), then do not force end users
+        // to do a Proof of Benevolence for pack purchasing.  Users will then be
+        // allowed to purchase via methods other than POB.
+        if (contractLocked) {
+            _;
+        }
+        else if (
+            // At this point, only GENI token may be used to purchase packs for
+            // the first 60 days of the new Edition launch.
+            block.timestamp < LAUNCH_TIMESTAMP + 60 days
+            && paymentToken != geniAddress
+        ) {
+            revert ErrorPobOnly();
+        }
+        else {
+            _;
+        }
     }
 
     /**
@@ -369,137 +349,6 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
             revert ErrorNotAllowed();
         }
         _;
-    }
-
-    /**
-     * @dev Users can purchase First Edition v2 GENFT Packs for as long as
-     *      Edition v2 is the latest edition.  If Edition v2 is not the latest,
-     *      users can still purchase from it ONLY for the first 365 Genius days.
-     */
-    modifier canPurchase(address paymentToken) {
-        if (
-            block.timestamp < LAUNCH_TIMESTAMP + 60 days
-            && paymentToken != geniAddress
-        ) {
-            revert ErrorPobOnly();
-        }
-
-        if (
-            genftContract.currentEdition().editionAddress != address(this)
-            && calendarContract.getCurrentGeniusDay() > 365
-        ) {
-            revert ErrorEditionExpired();
-        }
-
-        _;
-    }
-
-    /**
-     * @dev set metadata for all NFTs, private function
-     */
-    function _setURIs() private {
-        unchecked {
-        for (uint8 rarity = 0; rarity < 8; rarity++) {
-            for (uint256 variety = 0; variety < VARIETIES[rarity]; variety++) {
-                uint256 tokenId = ((uint256(rarity) << 8) | variety) + 1;
-
-                _setTokenURI(
-                    tokenId,
-                    string(abi.encodePacked(
-                        Strings.toString(rarity),
-                        "_",
-                        Strings.toString(variety),
-                        ".json"
-                    ))
-                );
-            } // end for variety
-        } // end for rarity
-        } // end unchecked
-    }
-
-    /**
-     * @notice  mint ERC1155 token
-     * @dev  virtual function, should be overriden in the implementation contract
-     * should be called only by Gnft contract
-     *
-     * @param  to  receiver of the token
-     * @param  quantity  of the token.  NOTE: this was redundant, and the value
-     *                   1 will always be assumed to be the value passed through
-     *                   to this function.
-     * @param  rand1  random number 1
-     * @param  rand2  random number 2
-     */
-    function mint(
-        address to,
-        // NOTE: Dai, quantity is always 1.  If we will never have the "mint"
-        // function mint more than 1 quantity, then can we just remove this
-        // parameter?
-        //
-        // "quantity" is always 1; however, this parameter remains here because
-        // the Genius NFT Controller passes a value to this parameter.
-        uint256 quantity,
-        uint256 rand1,
-        uint256 rand2
-    )
-        public
-        override
-        returns (
-            uint256,
-            uint8,
-            uint8
-        )
-    {
-        if (msg.sender != genftAddress) {
-            revert ErrorNotAllowed();
-        }
-        // Quantity is always 1, and therefore it will not be passed to this
-        // function for efficiency.
-        return _mintRand(to, rand1, rand2);
-    }
-
-    /**
-     * @notice  mint ERC1155 token
-     * @dev  private function, should be overriden in the implementation contract
-     * should be called only by Gnft contract
-     *
-     * @param  to  receiver of the token
-     * @param  rand1  random number 1
-     * @param  rand2  random number 2
-     */
-    function _mintRand(
-        address to,
-        uint256 rand1,
-        uint256 rand2
-    )
-        private
-        returns (
-            uint256,
-            uint8,
-            uint8
-        )
-    {
-        // STEP 1: generate the token ID
-        (uint256 tokenId, uint8 rarity, uint8 variety) = _genTokenId(
-            rand1,
-            rand2
-        );
-
-        if (0 == tokenToRarity[tokenId]) {
-            tokenToRarity[tokenId] = rarity;
-            tokenToVariety[tokenId] = variety;
-        }
-        _mint(to, tokenId, 1, "0x00");
-
-        // NOTE: The examples below show how uri will be generated for opeansea
-        // compatability.
-        //
-        // URI Example 1:
-        // "ipfs://JGkARStQ5yBXgyfG2ZH3Jby8w6BgQmTRCQF5TrfB2hPjrD/Reserved.json"
-        //
-        // URI Example 2:
-        // "ipfs://JGkARStQ5yBXgyfG2ZH3Jby8w6BgQmTRCQF5TrfB2hPjrD/0_1.json"
-        emit Mint(to, tokenId, 1, rarity, variety);
-        return (tokenId, rarity, variety);
     }
 
     /**
@@ -520,7 +369,7 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         )
     {
         // scale down between 0 to 1 (in phi precision)
-        rand1 %= PHI_PRECISION;
+        rand1 %= 10**27;
         uint8 rarity;
         if (rand1 < MAX_MYTHIC_AMPED) {
             rarity = RARITY_MYTHIC_AMPED;
@@ -702,22 +551,6 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
     }
 
     /**
-     * @notice  burn token
-     * @dev  burn tokn
-     *
-     * @param  from  account
-     * @param  tokenId  token id
-     * @param  amount  the quantity of the token IDs to burn.
-     */
-    function burn(
-        address from,
-        uint256 tokenId,
-        uint256 amount
-    ) external {
-        _burn(from, tokenId, amount);
-    }
-
-    /**
      * @notice  define user mint setting
      * @dev  called only by oaGrantor
      * @param  colToken  payment token
@@ -733,8 +566,8 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         // collateral in the Stability Pool and 2) it is an active collateral
         // currently accepted for the Stability Pool.
         if (
-            !stabilityContract.existingCollaterals(colToken) ||
-            !stabilityContract.activeCollaterals(colToken) ||
+            !cvContract.existingCollaterals(colToken) ||
+            !cvContract.activeCollaterals(colToken) ||
             amount1 == 0 ||
             amount2 == 0
         ) {
@@ -756,10 +589,7 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
      * @dev  remove mint setting for the payment token, called by only oaGrantor
      * @param  paymentToken  token address to be removed
      */
-    function removeUserMint(address paymentToken)
-        external
-        onlyGrantor
-    {
+    function removeUserMint(address paymentToken) external onlyGrantor {
         if (mintSettings[paymentToken].feeForBooster == 0) {
             revert ErrorMintSettingDoesNotExist();
         }
@@ -781,9 +611,9 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         }
         MintSetting memory setting = mintSettings[paymentToken];
 
-        unchecked {
         // NOTE: start payment procedure
         uint256 totalFee = setting.feeForUltimate * quantity;
+        unchecked {
 
         if (paymentToken == address(0)) {
             // native token payment
@@ -807,7 +637,7 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         }
         // end payment procedure
 
-        _mint(msg.sender, ULTIMATE_TOKEN_ID, quantity, "0x00");
+        editionContract.mintById(msg.sender, ULTIMATE_TOKEN_ID, quantity);
         emit MintUltimatePacks(msg.sender, ULTIMATE_TOKEN_ID, quantity);
         } // end unchecked
     }
@@ -834,9 +664,9 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         }
         MintSetting memory setting = mintSettings[paymentToken];
 
-        unchecked {
         // NOTE: start payment procedure
         uint256 totalFee = setting.feeForUltimate * quantity;
+        unchecked {
 
         if (paymentToken == address(0)) {
             // native token payment
@@ -870,7 +700,7 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         // end payment procedure
 
         // NOTE: start minting tokens
-        _mint(msg.sender, ULTIMATE_TOKEN_ID, quantity, "0x00");
+        editionContract.mintById(msg.sender, ULTIMATE_TOKEN_ID, quantity);
         emit MintUltimatePacks(msg.sender, ULTIMATE_TOKEN_ID, quantity);
         }   // end unchecked
     }
@@ -894,9 +724,10 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         }
         MintSetting memory setting = mintSettings[paymentToken];
 
-        unchecked {
         // NOTE: start payment procedure
         uint256 totalFee = setting.feeForBooster * quantity;
+        unchecked {
+
         // address holder, address spender, uint256 nonce, uint256 expiry,
         //        bool allowed, uint8 v, bytes32 r, bytes32 s
         IDaiPermit(paymentToken).permit(
@@ -916,24 +747,24 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
             totalFee
         );
 
-        _mint(msg.sender, ULTIMATE_TOKEN_ID, quantity, "0x00");
+        editionContract.mintById(msg.sender, ULTIMATE_TOKEN_ID, quantity);
         emit MintUltimatePacks(msg.sender, ULTIMATE_TOKEN_ID, quantity);
-        }   // end unchecked
+        } // end unchecked
     }
 
     /**
      * @dev    allows the user to unpack multiple ULTIMATE PACKS at once
      * @param  quantity  the amount for unpacking
      */
-    function unpackUltimate(uint256 quantity) external {
-        if (oneUnpackPerBlock[msg.sender][block.number]) {
+    function unpackUltimate(uint256 quantity) external nonReentrant {
+        if (oneUnpackPerBlock[msg.sender] == block.number) {
             revert MustWaitAnotherBlock();
         }
-        oneUnpackPerBlock[msg.sender][block.number] = true;
+        oneUnpackPerBlock[msg.sender] = block.number;
 
         // _burn will be reverted if he has insufficient quantity.
         // no need to catch it up
-        _burn(msg.sender, ULTIMATE_TOKEN_ID, quantity);
+        editionContract.packBurn(msg.sender, ULTIMATE_TOKEN_ID, quantity);
 
         uint256[] memory tokens = new uint256[](ULTIMATE_YIELD * quantity);
         uint8[] memory rarities = new uint8[](ULTIMATE_YIELD * quantity);
@@ -942,11 +773,14 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         unchecked {
         for (uint256 i = 0; i < quantity; i++) {
             for (uint256 j = 0; j < ULTIMATE_YIELD; j++) {
-                uint256 rRand = _random(msg.sender, 400999 + (i * quantity * ULTIMATE_YIELD + j));
-                uint256 vRand = _random(msg.sender, 400999 + (i * quantity * ULTIMATE_YIELD + j + ULTIMATE_YIELD));
-                (uint256 tokenId, uint8 rarity, uint8 variety) = _genTokenIdForUltimateUnpack(rRand, vRand, j);
+                uint256 rRand = geniusRandom(msg.sender,
+                    400999 + (i * quantity * ULTIMATE_YIELD + j));
+                uint256 vRand = geniusRandom(msg.sender, 400999 + (
+                    i * quantity * ULTIMATE_YIELD + j + ULTIMATE_YIELD));
+                (uint256 tokenId, uint8 rarity, uint8 variety)
+                    = _genTokenIdForUltimateUnpack(rRand, vRand, j);
 
-                _mint(msg.sender, tokenId, 1, "0x00");
+                editionContract.mintById(msg.sender, tokenId, 1);
                 tokens[i * ULTIMATE_YIELD + j] = tokenId;
                 rarities[i * ULTIMATE_YIELD + j] = rarity;
                 varieties[i * ULTIMATE_YIELD + j] = variety;
@@ -978,9 +812,10 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         }
         MintSetting memory setting = mintSettings[paymentToken];
 
-        unchecked {
         //NOTE: start payment procedure
         uint256 totalFee = setting.feeForBooster * quantity;
+        unchecked {
+
         if (paymentToken == address(0)) {
             // native token payment
             if (msg.value < totalFee) {
@@ -1003,7 +838,7 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         // end payment procedure
 
         // NOTE: start minting tokens
-        _mint(msg.sender, BOOSTER_TOKEN_ID, quantity, "0x00");
+        editionContract.mintById(msg.sender, BOOSTER_TOKEN_ID, quantity);
         emit MintBoosterPacks(msg.sender, BOOSTER_TOKEN_ID, quantity);
         } // end unchecked
     }
@@ -1025,10 +860,10 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         }
         MintSetting memory setting = mintSettings[paymentToken];
 
-        unchecked {
-        uint256 totalFee = setting.feeForBooster * quantity;
-
         //NOTE: start payment procedure
+        uint256 totalFee = setting.feeForBooster * quantity;
+        unchecked {
+
         if (paymentToken == address(0)) {
             // native token payment
             if (msg.value < totalFee) {
@@ -1060,7 +895,7 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         // end payment procedure
 
         // NOTE: start minting tokens
-        _mint(msg.sender, BOOSTER_TOKEN_ID, quantity, "0x00");
+        editionContract.mintById(msg.sender, BOOSTER_TOKEN_ID, quantity);
         emit MintBoosterPacks(msg.sender, BOOSTER_TOKEN_ID, quantity);
         } // end unchecked
     }
@@ -1086,6 +921,7 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
 
         //NOTE: start payment procedure
         uint256 totalFee = setting.feeForBooster * quantity;
+        unchecked {
 
         // address holder, address spender, uint256 nonce, uint256 expiry,
         //        bool allowed, uint8 v, bytes32 r, bytes32 s
@@ -1106,23 +942,24 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
             totalFee
         );
 
-        _mint(msg.sender, BOOSTER_TOKEN_ID, quantity, "0x00");
+        editionContract.mintById(msg.sender, BOOSTER_TOKEN_ID, quantity);
         emit MintBoosterPacks(msg.sender, BOOSTER_TOKEN_ID, quantity);
+        } // end unchecked
     }
 
     /**
      * @dev    allows the user to unpack multiple BOOSTER PACKS at once
      * @param  quantity  the amount for unpacking
      */
-    function unpackBooster(uint256 quantity) external {
-        if (oneUnpackPerBlock[msg.sender][block.number]) {
+    function unpackBooster(uint256 quantity) external nonReentrant {
+        if (oneUnpackPerBlock[msg.sender] == block.number) {
             revert MustWaitAnotherBlock();
         }
-        oneUnpackPerBlock[msg.sender][block.number] = true;
+        oneUnpackPerBlock[msg.sender] = block.number;
 
         // _burn will be reverted if he has sufficient quantity.
         // no need to catch it up
-        _burn(msg.sender, BOOSTER_TOKEN_ID, quantity);
+        editionContract.packBurn(msg.sender, BOOSTER_TOKEN_ID, quantity);
 
         // each booster will yield 4 GENFTs
         uint256[] memory tokens = new uint256[](BOOSTER_YIELD * quantity);
@@ -1132,11 +969,11 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
         unchecked {
         for (uint256 i = 0; i < quantity; i++) {
             for (uint256 j = 0; j < BOOSTER_YIELD; j++) {
-                uint256 rRand = _random(msg.sender, 5500999 + (i * quantity * BOOSTER_YIELD + j));
-                uint256 vRand = _random(msg.sender, 5500999 + (i * quantity * BOOSTER_YIELD + j + BOOSTER_YIELD));
+                uint256 rRand = geniusRandom(msg.sender, 5500999 + (i * quantity * BOOSTER_YIELD + j));
+                uint256 vRand = geniusRandom(msg.sender, 5500999 + (i * quantity * BOOSTER_YIELD + j + BOOSTER_YIELD));
                 (uint256 tokenId, uint8 rarity, uint8 variety) = _genTokenIdForBoosterUnpack(rRand, vRand, j);
 
-                _mint(msg.sender, tokenId, 1, "0x00");
+                editionContract.mintById(msg.sender, tokenId, 1);
                 tokens[i * BOOSTER_YIELD + j] = tokenId;
                 rarities[i * BOOSTER_YIELD + j] = rarity;
                 varieties[i * BOOSTER_YIELD + j] = variety;
@@ -1151,89 +988,6 @@ contract Edition001V2 is EditionAbstract, ReentrancyGuard {
             varieties
         );
         } // end unchecked
-    }
-
-    function convert() external nonReentrant {
-        // check if user is a holder of Edition 001 v1 NFTs
-        uint256[] memory tokenIds = genftV1Contract.tokensByAccount(msg.sender);
-        if (tokenIds.length == 0) {
-            revert ErrorNotHolder();
-        }
-
-        // create an account array with the same address for batch process
-        address[] memory accounts = new address[](tokenIds.length);
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            accounts[i] = msg.sender;
-        }
-
-        // getting balances for token Ids.
-        uint256[] memory amounts = genftV1Contract.balanceOfBatch(
-            accounts,
-            tokenIds
-        );
-
-        // transfer the old GENFTs to the new contract edition001 v2.
-        genftV1Contract.safeBatchTransferFrom(
-            msg.sender,
-            address(this),
-            tokenIds,
-            amounts,
-            "0x00"
-        );
-
-        // minting new tokens with the same token ids and amounts
-        _mintBatch(msg.sender, tokenIds, amounts, "0x00");
-
-        // mint booster pack if this is the user's first time converting.
-        if (!userReceivedConvertReward[msg.sender]) {
-            _mint(msg.sender, BOOSTER_TOKEN_ID, 1, "0x00");
-            userReceivedConvertReward[msg.sender] = true;
-        }
-        emit Convert(msg.sender, tokenIds, amounts);
-    }
-
-    /**
-     * @notice  claim the sacrifice participant's free Genius NFT.
-     * @dev  called by only owner
-     *
-     * @param  _recipient address of a new edition
-     * @param  _sacGrantAmount  the amount of Genitos granted as a result of the
-     *                          end user's sacrifice.
-     * @param  _merkleProof array of hashes up the merkleTree
-     */
-    function claimFreeNft(
-        address _recipient,
-        uint256 _sacGrantAmount,
-        bytes32[] calldata _merkleProof
-    ) external nonReentrant returns (uint256) {
-        if (!claimedFreeNft[_recipient] ||
-            !verifyMerkleProof(_recipient, _sacGrantAmount, _merkleProof))
-        {
-            revert ErrorMerkleOrAlreadyClaimed();
-        }
-        claimedFreeNft[_recipient] = true;
-
-        (uint256 tokenId, uint8 r, uint8 v) = _mintRand(
-            _recipient,
-            _random(_recipient, 8000000),
-            _random(_recipient, 9000000)
-        );
-        return tokenId;
-    }
-
-    /**
-     * @dev Claims GENFT
-     * @param destination is the claimant, based on off chain data
-     * @param amount claimant's amount of GENFT to mint
-     * @param merkleProof array of hashes up the merkleTree
-     */
-    function verifyMerkleProof(
-        address destination,
-        uint256 amount,
-        bytes32[] calldata merkleProof
-    ) private returns (bool) {
-        bytes32 node = keccak256(abi.encodePacked(destination, amount));
-        return MerkleProof.verify(merkleProof, MERKLE_ROOT, node);
     }
 
 }
