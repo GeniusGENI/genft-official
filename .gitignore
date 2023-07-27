@@ -11,5 +11,5 @@ artifacts
 
 package-lock.json
 .DS_Store
-.swp
-.swo
+*.swp
+*.swo

@@ -3,7 +3,9 @@
 require("hardhat-prettier");
 require("@nomicfoundation/hardhat-toolbox");
 require('dotenv').config();
-
+require("hardhat-contract-sizer");
+require("hardhat-gas-reporter");
+require('dotenv').config();
 const {
   edition001V2PublicKey,
   edition001V2PrivateKey,
